@@ -7,15 +7,32 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eljaska/claustomize/internal/block"
+	"github.com/eljaska/claustomize/internal/slot"
+	"github.com/eljaska/claustomize/internal/statusline/blocks"
 )
 
-func TestGenerate_EmitsSnippetsInOrder(t *testing.T) {
-	blocks := []block.Block{
-		{ID: "a", Snippet: `printf 'A'`},
-		{ID: "b", Snippet: `printf 'B'`},
+func singleStyle(id, snippet string) *blocks.Block {
+	return &blocks.Block{
+		ID:     id,
+		Name:   id,
+		Styles: []blocks.Style{{ID: "only", Name: "only", Snippet: snippet}},
 	}
-	script := Generate(blocks)
+}
+
+// build constructs a slot list from a sequence of filled blocks, inserting
+// the required empties to satisfy the invariant.
+func build(items ...*blocks.Block) slot.List {
+	l := slot.New()
+	for _, b := range items {
+		l, _ = l.Fill(len(l)-1, b, 0)
+	}
+	return l
+}
+
+func TestGenerate_EmitsSnippetsInOrder(t *testing.T) {
+	a := singleStyle("a", `printf 'A'`)
+	b := singleStyle("b", `printf 'B'`)
+	script := Generate(build(a, b))
 
 	if !strings.Contains(script, "printf 'A'") || !strings.Contains(script, "printf 'B'") {
 		t.Fatalf("script missing snippets:\n%s", script)
@@ -25,36 +42,38 @@ func TestGenerate_EmitsSnippetsInOrder(t *testing.T) {
 	}
 }
 
-func TestPreview_RendersSelectedBlocks(t *testing.T) {
-	blocks := []block.Block{
-		{ID: "model", Snippet: `printf '%s' "$(printf '%s' "$input" | jq -r '.model.display_name // empty')"`},
-		{ID: "literal", Snippet: `printf 'hello'`},
-	}
-	got := Preview(blocks)
+func TestPreview_RendersFilledBlocks(t *testing.T) {
+	model := singleStyle("model", `printf '%s' "$(printf '%s' "$input" | jq -r '.model.display_name // empty')"`)
+	lit := singleStyle("lit", `printf 'hello'`)
+	got := Preview(build(model, lit))
 	if !strings.Contains(got, "Opus 4.7") {
 		t.Errorf("expected preview to contain model name, got %q", got)
 	}
 	if !strings.Contains(got, "hello") {
 		t.Errorf("expected preview to contain literal, got %q", got)
 	}
-	if !strings.Contains(got, " | ") {
-		t.Errorf("expected separator in preview, got %q", got)
+}
+
+func TestPreview_NoFilledSlots(t *testing.T) {
+	if got := Preview(slot.New()); got != "" {
+		t.Errorf("expected empty preview for empty slots, got %q", got)
 	}
 }
 
-func TestPreview_EmptySelection(t *testing.T) {
-	if got := Preview(nil); !strings.Contains(got, "no blocks") {
-		t.Errorf("expected empty-selection message, got %q", got)
+func TestPreview_NoAutomaticSeparator(t *testing.T) {
+	a := singleStyle("a", `printf 'A'`)
+	b := singleStyle("b", `printf 'B'`)
+	got := Preview(build(a, b))
+	if got != "AB" {
+		t.Errorf("expected concatenation 'AB' with no auto-separator, got %q", got)
 	}
 }
 
-func TestPreview_OmitsEmptySegments(t *testing.T) {
-	blocks := []block.Block{
-		{ID: "a", Snippet: `printf 'A'`},
-		{ID: "empty", Snippet: `printf ''`},
-		{ID: "b", Snippet: `printf 'B'`},
-	}
-	got := Preview(blocks)
+func TestPreview_UsesExplicitSeparatorBlock(t *testing.T) {
+	a := singleStyle("a", `printf 'A'`)
+	sep := singleStyle("sep", `printf ' | '`)
+	b := singleStyle("b", `printf 'B'`)
+	got := Preview(build(a, sep, b))
 	if got != "A | B" {
 		t.Errorf("expected 'A | B', got %q", got)
 	}
@@ -64,10 +83,7 @@ func TestInstall_WritesScriptAndSettings(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	blocks := []block.Block{
-		{ID: "lit", Snippet: `printf 'hi'`},
-	}
-	if err := Install(blocks); err != nil {
+	if err := Install(build(singleStyle("lit", `printf 'hi'`))); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -111,7 +127,7 @@ func TestInstall_PreservesExistingSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Install([]block.Block{{ID: "lit", Snippet: `printf 'x'`}}); err != nil {
+	if err := Install(build(singleStyle("lit", `printf 'x'`))); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
